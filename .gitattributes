@@ -1,0 +1,13 @@
+# Los archivos de Windows van SIEMPRE con CRLF: un .bat con finales de línea de
+# Unix puede romper los `goto` en cmd.exe.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Los de macOS, siempre con LF.
+*.command text eol=lf
+*.sh      text eol=lf
+
+# Binarios: que git no los toque.
+*.webm binary
+*.mp4  binary
+*.mov  binary

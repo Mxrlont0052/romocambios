@@ -1,0 +1,5 @@
+Aquí se instalan ffmpeg y ffprobe si prefieres llevarlos con la app en vez de
+dejarlos en ~/.romocambios/bin.
+
+Normalmente esta carpeta queda VACÍA: el instalador (instalar-mac.command) los
+deja en tu carpeta de usuario y la app los encuentra igual.

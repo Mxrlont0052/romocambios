@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROMO CAMBIOS</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="dot"></span> ROMO <b>CAMBIOS</b></div>
+    <nav id="steps">
+      <button class="step on" data-view="load"><i>1</i> Cargar</button>
+      <button class="step" data-view="mark"><i>2</i> Marcar</button>
+      <button class="step" data-view="render"><i>3</i> Renderizar</button>
+      <button class="step" data-view="review"><i>4</i> Revisar</button>
+    </nav>
+    <div class="headright">
+      <span id="envPill" class="pill">…</span>
+      <button id="btnSettings" class="ghost" title="Configuración">⚙︎</button>
+    </div>
+  </header>
+
+  <!-- Configuración -->
+  <section id="settings" class="card hidden">
+    <div class="grid2">
+      <label class="span2">URL del Web App (romocont / Sheet)
+        <input id="cfgUrl" type="text" placeholder="https://script.google.com/.../exec" />
+      </label>
+      <label>Banco de voces en off
+        <div class="pathrow">
+          <input id="cfgVo" type="text" readonly placeholder="carpeta con .mp3/.wav" />
+          <button data-pick="vo" class="ghost">Elegir…</button>
+        </div>
+      </label>
+      <label>Carpeta de salida
+        <div class="pathrow">
+          <input id="cfgOut" type="text" readonly placeholder="dónde se guardan" />
+          <button data-pick="out" class="ghost">Elegir…</button>
+        </div>
+      </label>
+      <label>Plantillas de video (opcional)
+        <div class="pathrow">
+          <input id="cfgTpl" type="text" readonly placeholder="carpeta con CORTE/ METRICA/ ARRASTRE/" />
+          <button data-pick="tpl" class="ghost">Elegir…</button>
+        </div>
+      </label>
+      <label>Fuente (.ttf)
+        <input id="cfgFont" type="text" />
+      </label>
+      <label>Quién está editando
+        <select id="cfgEditor">
+          <option value="">— elegir —</option>
+          <option value="DANIEL">DANIEL</option>
+          <option value="TIPAN">TIPAN</option>
+          <option value="MARLONT">MARLONT</option>
+        </select>
+      </label>
+      <label class="check">
+        <input id="cfgRegistrar" type="checkbox" checked />
+        Registrar los videos en la hoja de romocont
+      </label>
+      <label class="check">
+        <input id="cfgSubirDrive" type="checkbox" checked />
+        Subir los videos a Google Drive (y poner el link en la hoja)
+      </label>
+    </div>
+    <div class="right"><button id="cfgSave" class="primary">Guardar</button></div>
+  </section>
+
+  <!-- 1 · CARGAR ------------------------------------------------------------ -->
+  <main id="view-load" class="view">
+    <section class="card">
+      <h2>Videos del lote</h2>
+      <div class="drop">
+        <p>Carga todos los clips de cámara que vas a procesar en esta tanda.</p>
+        <button id="btnPickVideos" class="primary">Elegir videos…</button>
+        <p class="note">Puedes seleccionar varios a la vez con ⌘/Ctrl o ⇧.</p>
+      </div>
+      <div id="loadList" class="filelist"></div>
+
+      <h2>Parámetros del lote</h2>
+      <div class="grid3">
+        <label>Efecto del cambio
+          <select id="optEffect">
+            <option value="auto">Aleatorio por video</option>
+            <option value="luces">Ráfaga de luces</option>
+            <option value="flash">Destellos lentos</option>
+            <option value="estrobo">Estrobo</option>
+            <option value="punch">Zoom que no para</option>
+            <option value="latido">Latido</option>
+            <option value="temblor">Cámara temblando</option>
+            <option value="glitch">Glitch RGB</option>
+            <option value="discoteca">Luces de discoteca</option>
+            <option value="saturado">Color saturado</option>
+            <option value="vineta">Viñeta que se cierra</option>
+          </select>
+        </label>
+        <label>Intensidad
+          <input id="optIntensity" type="range" min="0.4" max="1.6" step="0.1" value="1" />
+        </label>
+        <label>Voz en off
+          <select id="optVoPref">
+            <option value="auto">Donde quepa (recomendado)</option>
+            <option value="start">Preferir el inicio</option>
+            <option value="end">Preferir el final</option>
+            <option value="none">Sin voz (solo SV)</option>
+          </select>
+        </label>
+      </div>
+      <p class="note">El efecto arranca exactamente donde marques el cambio y
+        <b>sigue hasta que termina el video</b>.</p>
+
+      <h2>Numeración</h2>
+      <div class="dmbox">
+        <div>
+          <div id="dmInfo" class="note">Consultando romocont…</div>
+          <p class="note">Cada categoría lleva su propia serie. El nombre se asigna
+            según la categoría que le pongas a cada video en el paso 2, y al terminar
+            el render queda registrado en la hoja de romocont a tu nombre.</p>
+        </div>
+        <button id="btnNextDm" class="ghost" title="Volver a consultar">↻</button>
+      </div>
+
+      <div class="right"><button id="btnToMark" class="primary big2" disabled>Ir a marcar →</button></div>
+    </section>
+  </main>
+
+  <!-- 2 · MARCAR ------------------------------------------------------------ -->
+  <main id="view-mark" class="view hidden">
+    <section class="card markcard">
+      <div class="markhead">
+        <div>
+          <b id="markCount">0 / 0</b>
+          <span id="markName" class="note"></span>
+        </div>
+        <div class="keys note">
+          <kbd>espacio</kbd> play · <kbd>M</kbd> marcar ·
+          <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd> tipo ·
+          <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd> categoría ·
+          <kbd>I</kbd><kbd>O</kbd> recortar inicio/fin ·
+          <kbd>←</kbd><kbd>→</kbd> ±1 frame · <kbd>enter</kbd> siguiente
+        </div>
+      </div>
+
+      <div class="markbody">
+        <div class="markvideo">
+          <video id="mVideo" playsinline></video>
+          <input id="mSeek" type="range" min="0" max="100" step="0.01" value="0" />
+          <div class="marktime">
+            <span id="mTime">0:00.00</span>
+            <span id="mMarker" class="marker-none">sin marcar</span>
+          </div>
+          <div class="markbtns">
+            <button id="btnMark" class="primary">Marcar el cambio aquí (M)</button>
+            <button id="btnClearMark" class="ghost">Quitar</button>
+          </div>
+
+          <!-- Recorte: de dónde a dónde se usa el clip -->
+          <div class="trimbox">
+            <div class="trimhead">
+              <b>Recorte</b>
+              <span id="trimInfo" class="note">completo</span>
+            </div>
+            <div class="markbtns">
+              <button id="btnTrimIn" class="mini">Empezar aquí (I)</button>
+              <button id="btnTrimOut" class="mini">Terminar aquí (O)</button>
+              <button id="btnTrimClear" class="mini ghost">Usar completo</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="markside">
+          <h2>Tipo de mezcla</h2>
+          <div class="types">
+            <button data-type="CORTE" class="type">1 · MEZCLA DE CORTE</button>
+            <button data-type="METRICA" class="type">2 · MEZCLA MÉTRICA</button>
+            <button data-type="ARRASTRE" class="type">3 · MEZCLA DE ARRASTRE</button>
+            <button data-type="STEMS" class="type">4 · MEZCLA CON STEMS</button>
+            <button data-type="CLASE" class="type">5 · CLASE DE DJ GRATIS</button>
+          </div>
+
+          <h2>Categoría</h2>
+          <div class="cats">
+            <button data-cat="DEMOSTRATIVAS" class="cat">Q · DEMOSTRATIVAS</button>
+            <button data-cat="ESTUDIANTES" class="cat">W · ESTUDIANTES</button>
+            <button data-cat="RELLENO" class="cat">E · RELLENO</button>
+          </div>
+          <p id="catNombre" class="note"></p>
+
+          <h2>Plantilla</h2>
+          <p class="note">Por defecto va aleatoria del repertorio de esa técnica.</p>
+          <button id="btnGallery" class="ghost wide">Ver el repertorio…</button>
+          <p id="tplChosen" class="note"></p>
+
+          <div class="navbtns">
+            <button id="btnPrev" class="ghost">← Anterior</button>
+            <button id="btnNext" class="primary">Siguiente →</button>
+          </div>
+          <div id="markStrip" class="strip"></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="right pad">
+      <button id="btnToRender" class="primary big2">Renderizar el lote →</button>
+    </div>
+  </main>
+
+  <!-- 3 · RENDER ------------------------------------------------------------ -->
+  <main id="view-render" class="view hidden">
+    <section class="card">
+      <div class="markhead">
+        <h2 style="margin:0">Cola de render</h2>
+        <div>
+          <button id="btnCancel" class="ghost">Cancelar</button>
+          <button id="btnStart" class="primary">Empezar</button>
+        </div>
+      </div>
+      <div id="renderList" class="renderlist"></div>
+      <!-- Estado de la subida a Drive: sin esto las subidas serían invisibles y
+           uno cerraría la app creyendo que ya está todo arriba. -->
+      <div id="driveBar" class="note hidden" style="margin-top:10px"></div>
+      <div class="right"><button id="btnToReview" class="primary big2">Ir a revisar →</button></div>
+    </section>
+  </main>
+
+  <!-- 4 · REVISAR ----------------------------------------------------------- -->
+  <main id="view-review" class="view hidden">
+    <section class="card">
+      <h2>Revisión y ajustes</h2>
+      <p class="note">Retoca lo que haga falta. Si solo cambias volúmenes o la posición de la voz,
+        el re-render es de segundos; si mueves el marcador o la plantilla, se rehace el video.</p>
+      <div id="reviewList" class="reviewlist"></div>
+    </section>
+  </main>
+
+  <!-- Galería de plantillas -->
+  <div id="gallery" class="modal hidden">
+    <div class="modalbox">
+      <div class="modalhead">
+        <b>Repertorio de plantillas · <span id="galTech"></span></b>
+        <button id="galClose" class="ghost">Cerrar</button>
+      </div>
+      <div id="galGrid" class="galgrid"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

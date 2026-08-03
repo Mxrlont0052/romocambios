@@ -1,0 +1,5 @@
+Aquí se instalan ffmpeg.exe y ffprobe.exe si prefieres llevarlos con la app
+en vez de dejarlos en C:\Usuarios\TU-NOMBRE\.romocambios\bin.
+
+Normalmente esta carpeta queda VACÍA: el instalador (instalar-windows.bat) los
+deja en tu carpeta de usuario y la app los encuentra igual.

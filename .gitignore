@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Los binarios los baja el instalador, no van al repo (pesan 100+ MB).
+mac/bin/ffmpeg
+mac/bin/ffprobe
+windows/bin/*.exe
