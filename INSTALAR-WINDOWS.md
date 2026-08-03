@@ -21,12 +21,12 @@ En la página del repo (esta misma), arriba a la derecha:
 1. Botón verde **`Code`**
 2. En el menú que se abre, hasta abajo: **`Download ZIP`**
 
-Se baja un archivo llamado `ROMOCAMBIOS-main.zip` a tu carpeta de **Descargas**.
+Se baja un archivo llamado `romocambios-main.zip` a tu carpeta de **Descargas**.
 
 ### 1.2 — Extráelo (ojo con esto)
 
 1. Abre tu carpeta de **Descargas**
-2. **Clic derecho** sobre `ROMOCAMBIOS-main.zip`
+2. **Clic derecho** sobre `romocambios-main.zip`
 3. **`Extraer todo…`**
 4. Botón **`Extraer`**
 
@@ -37,14 +37,14 @@ Se baja un archivo llamado `ROMOCAMBIOS-main.zip` a tu carpeta de **Descargas**.
 > funciona desde ahí.
 >
 > **Cómo saber si lo hiciste bien:** cuando termines tienes que ver una **carpeta
-> amarilla** llamada `ROMOCAMBIOS-main`, no un archivo con un cierre 🤐.
+> amarilla** llamada `romocambios-main`, no un archivo con un cierre 🤐.
 
 ### 1.3 — Ponla en un lugar fijo
 
 Mueve esa carpeta a la raíz de tu disco, o sea `C:\`. Que quede así:
 
 ```
-C:\ROMOCAMBIOS-main
+C:\romocambios-main
 ```
 
 **Por qué importa:** no la dejes en Descargas (algún día la borras sin querer) ni
@@ -57,7 +57,7 @@ la app deja de encontrarlos).
 
 ### 2.1 — Ábrelo
 
-1. Entra a la carpeta `C:\ROMOCAMBIOS-main`
+1. Entra a la carpeta `C:\romocambios-main`
 2. Entra a la carpeta **`windows`**
 3. **Doble clic** en **`instalar-windows.bat`**
 

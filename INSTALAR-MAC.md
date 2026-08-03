@@ -26,14 +26,14 @@ En la página del repo (esta misma), arriba a la derecha:
 Se baja a **Descargas**. Safari lo descomprime solo; si usas Chrome, haz doble
 clic al ZIP.
 
-Te queda una carpeta llamada `ROMOCAMBIOS-main`.
+Te queda una carpeta llamada `romocambios-main`.
 
 ### 1.3 — Ponla en un lugar fijo
 
 Muévela a tus **Documentos**, por ejemplo:
 
 ```
-~/Documentos/ROMOCAMBIOS-main
+~/Documentos/romocambios-main
 ```
 
 **Por qué importa:** no la dejes en Descargas (algún día la borras sin querer) ni
@@ -46,7 +46,7 @@ espacio y la app deja de encontrarlos).
 
 ### 2.1 — 🛑 Ábrelo con clic derecho (no doble clic)
 
-1. Entra a la carpeta `ROMOCAMBIOS-main`
+1. Entra a la carpeta `romocambios-main`
 2. Entra a la carpeta **`mac`**
 3. **Clic derecho** (o `Control` + clic) sobre **`instalar-mac.command`**
 4. En el menú, **`Abrir`**
