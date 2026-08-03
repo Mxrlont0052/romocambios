@@ -16,12 +16,20 @@
 
 ### 1.1 — Descarga el ZIP
 
-En la página del repo (esta misma), arriba a la derecha:
+# ⬇️ **[BAJAR ROMO CAMBIOS](https://github.com/Mxrlont0052/romocambios/archive/refs/heads/main.zip)**
 
-1. Botón verde **`Code`**
-2. En el menú que se abre, hasta abajo: **`Download ZIP`**
+Clic en ese botón de arriba. Se baja un archivo llamado `romocambios-main.zip`
+a tu carpeta de **Descargas**.
 
-Se baja un archivo llamado `romocambios-main.zip` a tu carpeta de **Descargas**.
+<details>
+<summary>Si el link no te funciona, ábrelo así</summary>
+
+1. Ve a la **portada del repo**: <https://github.com/Mxrlont0052/romocambios>
+   (si estás leyendo esto en GitHub, clic en **`romocambios`** arriba a la izquierda)
+2. Botón verde **`Code`**, arriba a la derecha
+3. En el menú que se abre, hasta abajo: **`Download ZIP`**
+
+</details>
 
 ### 1.2 — Extráelo (ojo con esto)
 

@@ -13,8 +13,10 @@ Cada video queda registrado solo en la hoja de ROMO CONT y subido al Drive de RO
 
 ## 👉 ¿Es tu primera vez? Empieza aquí
 
-Abre la guía de **tu** computadora y síguela de arriba a abajo. Están escritas
-paso a paso, con capturas de qué vas a ver en cada momento.
+# ⬇️ **[BAJAR ROMO CAMBIOS](https://github.com/Mxrlont0052/romocambios/archive/refs/heads/main.zip)**
+
+Y después abre la guía de **tu** computadora y síguela de arriba a abajo. Están
+escritas paso a paso, con todo lo que vas a ver en cada momento.
 
 ### 🪟 **[→ INSTALAR EN WINDOWS](INSTALAR-WINDOWS.md)**
 
