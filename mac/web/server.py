@@ -127,15 +127,27 @@ def has_audio(path):
 # Efecto del cambio
 # --------------------------------------------------------------------------- #
 
-# Tempo interno del efecto. Antes se pedía el BPM en la UI, pero desde que el
-# efecto dura hasta el final del clip ese dato dejó de servir para nada: se fija
-# en 112 BPM, el tempo con el que se graban las demostrativas.
+# Tempo interno del efecto: se fija en 112 BPM, el tempo con el que se graban las
+# demostrativas (antes se pedía el BPM en la UI y no servía de nada).
 BEAT = 60.0 / 112.0
 
-# Todos los efectos son SOSTENIDOS: arrancan exactamente en el marcador y siguen
-# hasta que termina el video. No hay ráfagas de N pulsos.
-EFFECTS = ["luces", "flash", "estrobo", "punch", "latido",
-           "temblor", "glitch", "discoteca", "saturado", "vineta"]
+# Efectos del cambio, nueva generación (Marlon, 23-10-2026). Los 10 viejos (luces,
+# temblor, discoteca…) se fueron: le parecían aburridos. Regla: luz que se siente
+# real, pulsos cortos, blanco de base y color de acento, nunca tapar ni apagar al
+# DJ, el golpe justo en la marca, y sigue todo el video después del cambio.
+#
+# Cada efecto tiene dos partes:
+#  - la LUZ: una capa transparente hecha en Remotion (romo-reel/src/EfectoCambio.tsx)
+#    en <plantillas>/EFECTOS/<nombre>_sNN.webm, 41 s, con el golpe en su segundo 1;
+#  - lo que mueve el VIDEO (golpe de zoom, quemada de exposición, cortes de cámara),
+#    que lo hace ffmpeg aquí abajo.
+# El efecto de un video se guarda como "<nombre>:<semilla>" (p. ej. "camara:3") para
+# que un retoque repita exactamente el mismo.
+EFFECTS = ["golpe", "estrobo", "camara", "exposicion", "estrobo-color"]
+NOMBRES_EFECTO = {"golpe": "Flash + golpe", "estrobo": "Estrobo", "camara": "Flash de cámara",
+                  "exposicion": "Golpe de exposición", "estrobo-color": "Estrobo de color"}
+EFECTO_SEMILLAS = 10
+GOLPE_EF = 1.0   # la capa de luz trae el golpe en su segundo 1: arranca 1 s antes de la marca
 
 # Margen que se le respeta al efecto para que la voz no pise el golpe. Es solo el
 # ARRANQUE, no el efecto entero: si se protegiera todo el efecto sostenido no
@@ -148,86 +160,152 @@ def effect_duration(*_):
     return EFFECT_ONSET
 
 
-def _pulso(m, periodo, caida, var="t"):
-    """Envolvente de pulsos que se repite desde el marcador hasta el final.
+def partir_efecto(effect):
+    """"camara:3" → ("camara", 3). Un nombre sin semilla → (nombre, None).
+    Algo que no es un efecto nuevo (auto, o uno de los viejos) → (None, None)."""
+    nombre, _, sem = str(effect or "").partition(":")
+    if nombre not in EFFECTS:
+        return None, None
+    return nombre, (int(sem) if sem.isdigit() else None)
 
-    Se hace con `mod` en vez de enumerar los instantes uno por uno: el efecto
-    puede durar 20 s y la lista de pulsos se volvía interminable.
-    """
+
+def _pulso(m, periodo, caida, var="t"):
+    """Envolvente de pulsos que se repite desde el marcador hasta el final (con `mod`:
+    el efecto puede durar 20 s y una lista de instantes se volvía interminable)."""
     return (f"max(1-mod({var}-{m:.3f},{periodo:.4f})/{caida:.3f},0)"
             f"*gte({var},{m:.3f})")
 
 
-def _avance(m, dur, var="t"):
-    """0 en el marcador, 1 al final del clip."""
-    return f"clip(({var}-{m:.3f})/{max(dur - m, 0.2):.3f},0,1)"
+def _cae(m, dura, var="t"):
+    """1 en el marcador y cae a 0 en `dura` segundos."""
+    return f"max(1-({var}-{m:.3f})/{dura:.3f},0)*gte({var},{m:.3f})"
+
+
+# --- cortes de cámara: saltos de encuadre sin transición (Marlon: «exagerados,
+# bruscos, nada de temblorcitos»; y que no sea siempre el mismo patrón) ---------
+
+# Cuándo hay corte (segundos desde la marca, hasta `fin`).
+def _ritmo(nombre, fin):
+    B = BEAT
+    if nombre == "disparos":      # Flash de cámara: los 3 disparos y uno cada 2 beats
+        base = [0.0, 5 / FPS, 11 / FPS]
+        return base + [2 * B * k for k in range(1, int(fin / (2 * B)) + 2)]
+    if nombre == "beat":
+        return [B * k for k in range(0, int(fin / B) + 2)]
+    if nombre == "dos":
+        return [2 * B * k for k in range(0, int(fin / (2 * B)) + 2)]
+    if nombre == "contra":        # en la marca y después a contratiempo (beats 2 y 4)
+        return [0.0] + [B * (2 * k + 1) for k in range(0, int(fin / (2 * B)) + 2)]
+    if nombre == "doble":         # dos cortes pegados cada 2 beats
+        return sorted(x for k in range(0, int(fin / (2 * B)) + 2) for x in (2 * B * k, 2 * B * k + 0.13))
+    if nombre == "compas":        # ráfaga de 3 en el cambio y uno por compás
+        return [0.0, B / 2, B] + [4 * B * k for k in range(1, int(fin / (4 * B)) + 2)]
+    return []
+
+
+RITMOS = ["beat", "dos", "contra", "doble", "compas"]
+ENCUADRES = ["saltos", "dentro-fuera", "escalera", "lados", "vertical", "azar"]
+
+
+def _encuadre(nombre, i, o, rng):
+    """Encuadre del corte número i: (zoom, x 0–1, y 0–1, ángulo en grados).
+    `o` desplaza el patrón según la semilla para que dos semillas no arranquen igual."""
+    if nombre == "saltos":
+        return ([1.38, 1.52, 1.66][(i + o) % 3], [0.3, 0.5, 0.7][(2 * i + o) % 3],
+                [0.3, 0.5, 0.7][(i + 1 + o) % 3], [-3.4, 0.0, 3.4][(i + o) % 3])
+    if nombre == "dentro-fuera":  # cerrado ↔ abierto (el primero, el del golpe, cerrado)
+        if i % 2:
+            return (1.0, 0.5, 0.5, 0.0)
+        k = i // 2 + o
+        return (1.6, [0.35, 0.65][k % 2], [0.35, 0.6][(k // 2) % 2], [3.4, -3.4][k % 2])
+    if nombre == "escalera":      # cada corte más cerca y vuelve a empezar
+        return (1.15 + 0.15 * ((i + o) % 4), 0.5, 0.45, [2.0, -2.0][(i + o) % 2])
+    if nombre == "lados":         # izquierda ↔ derecha, inclinado al revés del lado
+        izq = (i + o) % 2 == 0
+        return (1.5, 0.25 if izq else 0.75, 0.5, 3.4 if izq else -3.4)
+    if nombre == "vertical":      # arriba ↔ abajo
+        arriba = (i + o) % 2 == 0
+        return (1.5, 0.5, 0.28 if arriba else 0.72, [2.0, -2.0][(i // 2 + o) % 2])
+    # azar fijo por semilla
+    return (rng.choice([1.35, 1.45, 1.55, 1.7]), rng.choice([0.3, 0.4, 0.5, 0.6, 0.7]),
+            rng.choice([0.3, 0.45, 0.6, 0.7]), rng.choice([-3.4, -2.0, 0.0, 2.0, 3.4]))
+
+
+def cortes_de(nombre, semilla):
+    """(ritmo, encuadre, desplazamiento) de los cortes de un efecto, o None si no lleva.
+    - Flash de cámara: siempre, al ritmo de sus disparos.
+    - Golpe de exposición: siempre (la semilla 0, la aprobada: cada beat y «saltos»).
+    - Flash + golpe, Estrobo y Estrobo de color: solo las semillas 3, 6 y 9.
+    Cada combinación cambia ritmo y encuadre para que no se repita el patrón."""
+    k = EFFECTS.index(nombre)
+    if nombre == "camara":
+        return ("disparos", ENCUADRES[semilla % len(ENCUADRES)], semilla)
+    if nombre == "exposicion":
+        if semilla == 0:
+            return ("beat", "saltos", 0)
+        return (RITMOS[(2 * semilla + 1) % len(RITMOS)], ENCUADRES[(semilla + 1) % len(ENCUADRES)], semilla)
+    if semilla and semilla % 3 == 0:
+        n = semilla // 3
+        return (RITMOS[(n + k) % len(RITMOS)], ENCUADRES[(2 * n + k) % len(ENCUADRES)], semilla)
+    return None
+
+
+def _escalones(tiempos, valores, var, inicial):
+    """Valor que salta en cada instante (sin suavizar): v0 + Σ (vi − vi−1)·[t ≥ ti]."""
+    partes, prev = [f"{inicial:.4f}"], inicial
+    for t, v in zip(tiempos, valores):
+        if abs(v - prev) > 1e-6:
+            partes.append(f"{v - prev:+.4f}*gte({var},{t:.3f})")
+        prev = v
+    return "+".join(partes).replace("+-", "-")
+
+
+# Golpe de zoom de cada efecto: (en la marca, en cada beat). Se multiplica con los cortes.
+PUNCH = {"golpe": (0.14, 0.035), "estrobo": (0.04, 0.0), "camara": (0.06, 0.0),
+         "exposicion": (0.10, 0.02), "estrobo-color": (0.04, 0.0)}
 
 
 def build_effect(marker, style, duration, intensity):
-    """Filtros del efecto. Arranca en el marcador y no para hasta el final."""
+    """Filtros que mueven el VIDEO para el efecto `style` ("nombre:semilla"): quemada
+    de exposición, rotación y zoom (golpe + cortes). La luz va aparte, como capa."""
+    nombre, semilla = partir_efecto(style)
+    if not nombre:
+        return []
+    semilla = semilla or 0
     m, i = float(marker), float(intensity)
     d = max(float(duration), m + 0.5)
-    # zoompan no conoce `t`: hay que reconstruir el tiempo con el nº de frame.
-    tz = f"(on/{FPS})"
-    desde = f"gte(t,{m:.3f})"
     out = []
-
-    def zoom(expr):
-        out.append(f"zoompan=z='{expr}':d=1:x='iw/2-(iw/zoom/2)':"
-                   f"y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS}")
-
-    if style == "luces":
-        # El de la referencia: destello + golpe de zoom en cada beat, sin parar.
-        out.append(f"eq=eval=frame:brightness='{0.80 * i:.3f}*({_pulso(m, BEAT, 0.13)})'")
-        zoom(f"1+{0.09 * i:.3f}*({_pulso(m, BEAT, 0.16, tz)})")
-    elif style == "flash":
-        # Destellos más lentos y suaves, cada dos beats.
-        out.append(f"eq=eval=frame:brightness='{0.60 * i:.3f}*"
-                   f"({_pulso(m, BEAT * 2, 0.30)})'")
-    elif style == "estrobo":
-        # Encendido/apagado duro y parejo, sin caída.
-        out.append(f"eq=eval=frame:brightness='{0.85 * i:.3f}*{desde}*"
-                   f"lt(mod(t-{m:.3f},0.18),0.09)'")
-    elif style == "punch":
-        # Golpe en el cambio y a partir de ahí un zoom lento que no se suelta.
-        zoom(f"1+{0.05 * i:.3f}*({_pulso(m, BEAT, 0.18, tz)})"
-             f"+{0.13 * i:.3f}*({_avance(m, d, tz)})")
-    elif style == "latido":
-        # Respiración: brillo y zoom en seno, cada dos beats.
-        seno = f"(0.5+0.5*sin(2*PI*(t-{m:.3f})/{BEAT * 2:.4f}))*{desde}"
-        senoz = f"(0.5+0.5*sin(2*PI*({tz}-{m:.3f})/{BEAT * 2:.4f}))*gte({tz},{m:.3f})"
-        out.append(f"eq=eval=frame:brightness='{0.22 * i:.3f}*{seno}'")
-        zoom(f"1+{0.05 * i:.3f}*({senoz})")
-    elif style == "temblor":
-        # Cámara temblando: se amplía un 5% para tener margen y se mueve el recorte.
-        amp = 13 * i
-        paso = f"gte({tz},{m:.3f})"
-        out.append(
-            f"zoompan=z='if({paso},1.05,1)':d=1:"
-            f"x='iw/2-(iw/zoom/2)+{amp:.1f}*sin(on*0.9)*{paso}':"
-            f"y='ih/2-(ih/zoom/2)+{amp:.1f}*cos(on*1.3)*{paso}':s={W}x{H}:fps={FPS}")
-    elif style == "glitch":
-        # rgbashift no acepta expresiones, así que se enciende a golpes con la
-        # línea de tiempo: un parpadeo de separación RGB en cada beat.
-        out.append(f"rgbashift=rh=16:bh=-16:gv=9:"
-                   f"enable='{desde}*lt(mod(t-{m:.3f},{BEAT:.4f}),0.12)'")
-        out.append(f"eq=eval=frame:brightness='{0.35 * i:.3f}*({_pulso(m, BEAT, 0.09)})'")
-    elif style == "discoteca":
-        # Barrido de tono continuo, como luces de colores girando.
-        out.append(f"hue=h='mod((t-{m:.3f})*160,360)*{desde}':"
-                   f"s='1+{0.35 * i:.3f}*{desde}'")
-    elif style == "saturado":
-        # Sube el color y el contraste en el cambio y se queda así.
-        subida = f"clip((t-{m:.3f})/0.5,0,1)"
-        out.append(f"eq=eval=frame:saturation='1+{0.75 * i:.3f}*{subida}':"
-                   f"contrast='1+{0.28 * i:.3f}*{subida}'")
-    elif style == "vineta":
-        # Se cierra una viñeta oscura alrededor y no se abre más. El `enable` es
-        # obligatorio: `vignette` oscurece algo incluso en su ángulo más abierto,
-        # así que sin apagar el filtro se le veía el efecto ANTES del cambio.
-        out.append(f"vignette=a='PI/2.2-{0.55 * i:.3f}*clip((t-{m:.3f})/1.0,0,1)':"
-                   f"eval=frame:enable='{desde}'")
+    if nombre == "exposicion":
+        # la imagen se «quema» de luz en el cambio y late suave por beat
+        out.append(f"eq=eval=frame:brightness='{0.42 * i:.3f}*({_cae(m, 0.45)})+{0.10 * i:.3f}*({_pulso(m, BEAT, 0.14)})'"
+                   f":contrast='1+{0.35 * i:.3f}*({_cae(m, 0.45)})':saturation='1-0.3*({_cae(m, 0.45)})'")
+    corte = cortes_de(nombre, semilla)
+    tiempos, encuadres = [], []
+    if corte:
+        ritmo, patron, o = corte
+        rng = random.Random(semilla * 31 + EFFECTS.index(nombre))
+        tiempos = [m + x for x in _ritmo(ritmo, d - m) if m + x < d]
+        encuadres = [_encuadre(patron, k, o, rng) for k in range(len(tiempos))]
+    tz = f"(on/{FPS})"
+    if encuadres and any(abs(e[3]) > 0 for e in encuadres):
+        ang = _escalones(tiempos, [e[3] * 3.14159 / 180 for e in encuadres], "t", 0.0)
+        out.append(f"rotate=a='{ang}':fillcolor=black")
+    a, b = PUNCH[nombre]
+    punch = f"(1+{a * i:.3f}*({_cae(m, 0.28, tz)})+{b * i:.3f}*({_pulso(m, BEAT, 0.16, tz)}))"
+    zc = _escalones(tiempos, [e[0] for e in encuadres], tz, 1.0) if encuadres else "1"
+    xc = _escalones(tiempos, [e[1] for e in encuadres], tz, 0.5) if encuadres else "0.5"
+    yc = _escalones(tiempos, [e[2] for e in encuadres], tz, 0.5) if encuadres else "0.5"
+    out.append(f"zoompan=z='({zc})*{punch}':d=1:x='(iw-iw/zoom)*({xc})':y='(ih-ih/zoom)*({yc})':s={W}x{H}:fps={FPS}")
     return out
+
+
+def efecto_archivo(cfg, effect):
+    """La capa de luz del efecto ("nombre:semilla"), si está en la carpeta."""
+    nombre, semilla = partir_efecto(effect)
+    if not nombre:
+        return ""
+    ruta = os.path.join(cfg.get("tpl_dir") or "", "EFECTOS", f"{nombre}_s{(semilla or 0):02d}.webm")
+    return ruta if os.path.isfile(ruta) else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -372,8 +450,33 @@ TPL_DUR = 4.0          # cuánto dura la plantilla sobre el video
 TPL_FADE = 0.45        # desvanecido de salida
 
 
-def build_overlay_complex(item, ov_path):
+def _capa_efecto(item, k_ef, entrada):
+    """Pega la capa de luz del efecto (entrada nº k_ef) 1 s antes de la marca, para
+    que su golpe caiga en el cambio; si la marca está antes del segundo 1 se le
+    recorta el comienzo. Se escala (viene a media resolución) y se corta con el clip."""
+    ini = float(item["marker"]) - GOLPE_EF
+    corte = f"trim=start={-ini:.3f}," if ini < 0 else ""
+    return (f"[{k_ef}:v]scale={W}:{H},format=yuva420p,{corte}setpts=PTS-STARTPTS+{max(ini, 0.0):.3f}/TB[ef];"
+            f"[{entrada}][ef]overlay=0:0:eof_action=pass[conluz];")
+
+
+def build_graph(item, cfg, ov_path, ef_path):
+    """filter_complex completo: el clip con su efecto, la capa de luz encima y la
+    plantilla encima de todo (el texto siempre se lee por encima de la luz)."""
+    k_ef = 2 if ov_path else 1
+    g = f"[0:v]{','.join(base_chain(item))}[base];"
+    entrada = "base"
+    if ef_path:
+        g += _capa_efecto(item, k_ef, entrada)
+        entrada = "conluz"
+    if ov_path:
+        return g + build_overlay_complex(item, ov_path, entrada)
+    return g + f"[{entrada}]{tpl.build(item['type'], item['template'], cfg.get('font') or DEFAULT_FONT)}[v]"
+
+
+def build_overlay_complex(item, ov_path, entrada=None):
     """filter_complex para plantillas de video: croma o alfa + superposición.
+    Con `entrada` solo devuelve la parte de la plantilla, encima de esa etiqueta.
 
     Las plantillas de Remotion duran solo la animación (2 s). Aquí se congela el
     último frame hasta los 4 s y se las desvanece al final, así se comportan
@@ -390,13 +493,15 @@ def build_overlay_complex(item, ov_path):
         hold = (f"tpad=stop_mode=clone:stop_duration={TPL_DUR - ov_dur:.2f},"
                 f"setpts=N/{FPS}/TB,"
                 f"fade=t=out:st={TPL_DUR - TPL_FADE:.2f}:d={TPL_FADE}:alpha=1,")
-    return (
-        f"[0:v]{','.join(base_chain(item))}[base];"
+    plantilla = (
         f"[1:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
         f"{key}format=yuva420p,{hold}setpts=PTS-STARTPTS[ov];"
-        f"[base][ov]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:"
+        f"[{entrada or 'base'}][ov]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2:"
         f"eof_action=pass:shortest=0[v]"
     )
+    if entrada:
+        return plantilla
+    return f"[0:v]{','.join(base_chain(item))}[base];" + plantilla
 
 
 def build_af_bed(gain_db=0.0):
@@ -646,7 +751,8 @@ def elegir_plantilla(cfg, carpeta):
     with _USADAS_LOCK:
         usadas = _leer_usadas(cfg)
         claves = [f"{carpeta}/{os.path.basename(f)}" for f in files]
-        evitar = {_direccion(u) for u in usadas[-2:]} - {None}
+        plantillas = [u for u in usadas if not u.startswith("EF/")]
+        evitar = {_direccion(u) for u in plantillas[-2:]} - {None}
         cand = [k for k in claves if _direccion(k) not in evitar] or claves
         # cuanto más atrás en la lista (o si nunca salió), mejor
         hace = {k: (usadas.index(k) if k in usadas else -1) for k in cand}
@@ -655,6 +761,33 @@ def elegir_plantilla(cfg, carpeta):
         usadas = [u for u in usadas if u != elegida] + [elegida]
         _guardar_usadas(cfg, usadas[-500:])
     return -100 - claves.index(elegida)
+
+
+def elegir_efecto(cfg, pedido):
+    """"nombre:semilla" para un video. Si ya trae semilla (un retoque) se respeta;
+    si trae solo el nombre se elige la semilla; si es «auto» o uno de los viejos, se
+    elige efecto y semilla. Rotación como la de plantillas: la combinación que hace
+    más tiempo no sale y nunca el mismo efecto que el video anterior."""
+    nombre, semilla = partir_efecto(pedido)
+    if nombre and semilla is not None:
+        return f"{nombre}:{semilla}"
+    nombres = [nombre] if nombre else EFFECTS
+    carpeta = os.path.join(cfg.get("tpl_dir") or "", "EFECTOS")
+    hay = [f"{n}:{s}" for n in nombres for s in range(EFECTO_SEMILLAS)
+           if os.path.isfile(os.path.join(carpeta, f"{n}_s{s:02d}.webm"))]
+    if not hay:   # sin carpeta de efectos: igual sale el movimiento de video (sin la luz)
+        return f"{nombre or random.choice(EFFECTS)}:0"
+    with _USADAS_LOCK:
+        usadas = _leer_usadas(cfg)
+        efs = [u[3:] for u in usadas if u.startswith("EF/")]
+        evitar = {efs[-1].split(":")[0]} if efs and not nombre else set()
+        cand = [h for h in hay if h.split(":")[0] not in evitar] or hay
+        hace = {h: (efs.index(h) if h in efs else -1) for h in cand}
+        menor = min(hace.values())
+        elegido = random.choice([h for h in cand if hace[h] == menor])
+        usadas = [u for u in usadas if u != "EF/" + elegido] + ["EF/" + elegido]
+        _guardar_usadas(cfg, usadas[-500:])
+    return elegido
 
 
 def render_item(item, cfg, voices, full=True):
@@ -668,8 +801,7 @@ def render_item(item, cfg, voices, full=True):
     item["duration"] = item["duration"] or probe_duration(item["video"])
     eff_dur = effect_duration()
 
-    if item["effect"] in ("auto", "", None):
-        item["effect"] = random.choice(EFFECTS)
+    item["effect"] = elegir_efecto(cfg, item["effect"])
     if item["template"] in (-1, None):
         # -1/None = aleatoria. Un template None llegaba cuando el panel mandaba un
         # número inválido (NaN → null): ahora se trata como aleatoria en vez de
@@ -691,16 +823,17 @@ def render_item(item, cfg, voices, full=True):
         # a `-ss` de entrada es ambiguo según la versión de ffmpeg. La plantilla no
         # se recorta: sus `-ss`/`-t` no deben tocarla.
         rec = recorte_args(item)
+        ef = efecto_archivo(cfg, item["effect"])
+        # `0:a:0?` y no `0:a?`: los iPhone nuevos meten una 2ª pista de audio
+        # espacial en `apple_apac`, un códec que ffmpeg NO decodifica. Con
+        # `0:a?` se mapeaban todas y el render reventaba entero; se toma solo
+        # la 1ª pista (el AAC estéreo normal). El `?` la hace opcional.
+        args = rec + ["-i", item["video"]]
         if ov:
-            # `0:a:0?` y no `0:a?`: los iPhone nuevos meten una 2ª pista de audio
-            # espacial en `apple_apac`, un códec que ffmpeg NO decodifica. Con
-            # `0:a?` se mapeaban todas y el render reventaba entero; se toma solo
-            # la 1ª pista (el AAC estéreo normal). El `?` la hace opcional.
-            args = (rec + ["-i", item["video"]] + overlay_decoder(ov) + ["-i", ov] +
-                    ["-filter_complex", build_overlay_complex(item, ov),
-                     "-map", "[v]", "-map", "0:a:0?"])
-        else:
-            args = rec + ["-i", item["video"], "-vf", build_vf(item, cfg)]
+            args += overlay_decoder(ov) + ["-i", ov]
+        if ef:
+            args += overlay_decoder(ef) + ["-i", ef]
+        args += ["-filter_complex", build_graph(item, cfg, ov, ef), "-map", "[v]", "-map", "0:a:0?"]
         args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                  "-pix_fmt", "yuv420p"]
         if has_audio(item["video"]):
