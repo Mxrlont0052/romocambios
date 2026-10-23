@@ -49,9 +49,18 @@ AUDIO_EXTS = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg",
 
 # Audio (EBU R128). El lecho queda fuerte y la voz 4 LU por encima. -12 deja el
 # headroom justo para que la voz encaje arriba sin que el limitador la aplaste.
+# Volumen (Marlon, 23-10-2026): en CapCut les subía 300–400 % y esos videos quedaban
+# en −7/−9 LUFS; el motor los sacaba en −12, o sea 3–5 dB más bajos. Ahora: se
+# empareja todo a −12 y se empuja +EMPUJE_DB con un limitador. Marlon eligió la
+# opción D: ≈ −6,7 LUFS (más fuerte que su ES 122 de CapCut, −7,0), sin saturar.
 LUFS_BED = -12.0
-LUFS_VO = -11.0
-HIGHPASS_HZ = 110      # fuera los bajos de la mezcla
+EMPUJE_DB = 15.0
+LUFS_VO = -8.0
+VOZ_EMPUJE_DB = 10.0  # la voz choca con el techo de picos antes de llegar: se empuja y la ataja el limitador final
+# Bajos: los teléfonos no reproducen por debajo de ~200 Hz; esa energía no se oye y
+# le roba volumen a todo lo demás. Corte fuerte en 180 Hz (24 dB/oct), un poco
+# menos de «retumbo» en 250 Hz y más presencia en 3 kHz.
+HIGHPASS_HZ = 180      # fuera los bajos de la mezcla
 DUCK_DB = -10.0         # cuánto baja la música mientras habla la voz
 GUARD = 0.35           # margen para que la voz no pise el efecto
 
@@ -507,13 +516,13 @@ def build_overlay_complex(item, ov_path, entrada=None):
 def build_af_bed(gain_db=0.0):
     """Audio del video: fuera los bajos, volumen al máximo razonable."""
     af = [
-        f"highpass=f={HIGHPASS_HZ}",
+        f"highpass=f={HIGHPASS_HZ}:poles=2", f"highpass=f={HIGHPASS_HZ}:poles=2",
+        "equalizer=f=250:t=q:w=1:g=-3", "equalizer=f=3000:t=q:w=1:g=3",
         f"loudnorm=I={LUFS_BED}:TP=-1.0:LRA=11",
         "aresample=48000",
+        f"volume={EMPUJE_DB + gain_db:.2f}dB",
+        "alimiter=limit=0.89:attack=3:release=60:level=disabled",
     ]
-    if abs(gain_db) > 0.01:
-        af.append(f"volume={gain_db:.2f}dB")
-    af.append("alimiter=limit=0.97")
     return ",".join(af)
 
 
@@ -552,7 +561,7 @@ def build_mix(vo_at, music_gain_db, vo_gain_db, total_dur, vo_dur, span=None):
         trim = f"atrim=start={span[0]:.3f}:end={span[1]:.3f},asetpts=PTS-STARTPTS,"
     vo_pre = (
         trim +
-        "highpass=f=90,"
+        "highpass=f=150,"
         "speechnorm=e=50:r=0.001:l=1,"
         "compand=attacks=0.002:decays=0.12:points=-60/-24|-30/-9|-12/-4|0/-2,"
         "alimiter=limit=0.89:level=disabled,"
@@ -561,9 +570,9 @@ def build_mix(vo_at, music_gain_db, vo_gain_db, total_dur, vo_dur, span=None):
     return (
         f"[0:a]volume='{duck_expr(a, b)}':eval=frame,"
         f"volume={music_gain_db:.2f}dB,aresample=48000[bed];"
-        f"[1:a]{vo_pre},volume={vo_gain_db:.2f}dB,"
+        f"[1:a]{vo_pre},volume={VOZ_EMPUJE_DB + vo_gain_db:.2f}dB,"
         f"adelay={delay}:all=1,apad=whole_dur={total_dur:.3f},aresample=48000[vo];"
-        f"[bed][vo]amix=inputs=2:normalize=0:duration=first,alimiter=limit=0.97[a]"
+        f"[bed][vo]amix=inputs=2:normalize=0:duration=first,alimiter=limit=0.84:attack=3:release=60:level=disabled[a]"
     )
 
 
@@ -751,7 +760,7 @@ def elegir_plantilla(cfg, carpeta):
     with _USADAS_LOCK:
         usadas = _leer_usadas(cfg)
         claves = [f"{carpeta}/{os.path.basename(f)}" for f in files]
-        plantillas = [u for u in usadas if not u.startswith("EF/")]
+        plantillas = [u for u in usadas if not u.startswith(("EF/", "VOZ/"))]
         evitar = {_direccion(u) for u in plantillas[-2:]} - {None}
         cand = [k for k in claves if _direccion(k) not in evitar] or claves
         # cuanto más atrás en la lista (o si nunca salió), mejor
@@ -761,6 +770,22 @@ def elegir_plantilla(cfg, carpeta):
         usadas = [u for u in usadas if u != elegida] + [elegida]
         _guardar_usadas(cfg, usadas[-500:])
     return -100 - claves.index(elegida)
+
+
+def elegir_voz(cfg, voices):
+    """Voz en off sin repetir (Marlon, 23-10-2026: 9 voces de «clase de DJ gratis
+    para Quito»): la que hace más tiempo no sale. Los nombres van numerados para
+    que, en orden, nunca suene la misma persona dos veces seguidas."""
+    with _USADAS_LOCK:
+        usadas = _leer_usadas(cfg)
+        vz = [u[4:] for u in usadas if u.startswith("VOZ/")]
+        nombres = [os.path.basename(v) for v in voices]
+        hace = {n: (vz.index(n) if n in vz else -1) for n in nombres}
+        menor = min(hace.values())
+        elegida = sorted(n for n in nombres if hace[n] == menor)[0]
+        usadas = [u for u in usadas if u != "VOZ/" + elegida] + ["VOZ/" + elegida]
+        _guardar_usadas(cfg, usadas[-500:])
+    return voices[nombres.index(elegida)]
 
 
 def elegir_efecto(cfg, pedido):
@@ -855,7 +880,7 @@ def render_item(item, cfg, voices, full=True):
 
     # --- voz en off ---
     if not item["vo"] and voices:
-        item["vo"] = random.choice(voices)
+        item["vo"] = elegir_voz(cfg, voices)
     if item["vo"]:
         # vo_dur = lo que realmente suena, no el largo del archivo: así el
         # ducking y la colocación no cuentan el silencio de los extremos.
