@@ -1029,6 +1029,15 @@ def plantillas_incluidas():
     return ""
 
 
+def voces_incluidas():
+    """Carpeta `voces/` que viene con la app (al lado de `plantillas/`), si la hay."""
+    for d in (os.path.join(PROJECT, "voces"),
+              os.path.join(os.path.dirname(PROJECT), "voces")):
+        if os.path.isdir(d):
+            return os.path.abspath(d)
+    return ""
+
+
 def load_config():
     cfg = {}
     try:
@@ -1040,6 +1049,13 @@ def load_config():
     cfg.setdefault("font", DEFAULT_FONT)
     cfg.setdefault("vo_dir", "")
     cfg.setdefault("tpl_dir", plantillas_incluidas())
+    # En la copia del equipo manda GitHub (Marlon, 23-10-2026: «todo tiene que estar
+    # en GitHub»): si la app trae sus plantillas y voces, se usan esas aunque alguien
+    # haya configurado otra carpeta. En la copia de Marlon no existen y no cambia nada.
+    if plantillas_incluidas():
+        cfg["tpl_dir"] = plantillas_incluidas()
+    if voces_incluidas():
+        cfg["vo_dir"] = voces_incluidas()
     cfg.setdefault("out_dir", os.path.join(plat.carpeta_videos(), "VIDEOS ROMO", "MDT"))
     cfg.setdefault("vo_prefer", "auto")
     cfg.setdefault("editor", "")
@@ -1468,7 +1484,102 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 
+# --------------------------------------------------------------------------- #
+# Se actualiza sola desde GitHub (Marlon, 23-10-2026)
+# --------------------------------------------------------------------------- #
+# Los editores instalan la app bajando el ZIP del repo, sin git. Para que nadie
+# tenga que volver a bajarla a mano, cada vez que se abre mira si en GitHub hay
+# una versión más nueva; si la hay, la baja, reemplaza el código, las plantillas
+# y las voces, y se reinicia. Sin internet o con cualquier error, abre igual con
+# la versión que tiene. Solo corre en la copia del equipo (mac/ o windows/ al
+# lado de plantillas/), nunca en la copia de trabajo de Marlon.
+REPO_GITHUB = "Mxrlont0052/romocambios"
+RAIZ_EQUIPO = os.path.dirname(PROJECT)
+VERSION_FILE = os.path.join(RAIZ_EQUIPO, ".version")
+
+
+def _es_copia_del_equipo():
+    return (os.path.basename(PROJECT) in ("mac", "windows")
+            and os.path.isdir(os.path.join(RAIZ_EQUIPO, "plantillas")))
+
+
+def _reemplazar_carpeta(origen, destino):
+    """Deja `destino` igual a `origen`: copia todo y borra lo que ya no está.
+    No borra la carpeta entera (en Windows la carpeta abierta no se puede borrar)."""
+    import shutil
+    os.makedirs(destino, exist_ok=True)
+    for raiz, dirs, archivos in os.walk(origen):
+        rel = os.path.relpath(raiz, origen)
+        os.makedirs(os.path.join(destino, rel), exist_ok=True)
+        for a in archivos:
+            shutil.copy2(os.path.join(raiz, a), os.path.join(destino, rel, a))
+    for raiz, dirs, archivos in os.walk(destino, topdown=False):
+        rel = os.path.relpath(raiz, destino)
+        if "__pycache__" in rel.split(os.sep):
+            continue
+        for a in archivos:
+            if not os.path.exists(os.path.join(origen, rel, a)):
+                os.remove(os.path.join(raiz, a))
+        if rel != "." and not os.path.isdir(os.path.join(origen, rel)) and not os.listdir(raiz):
+            os.rmdir(raiz)
+
+
+def actualizar_desde_github():
+    """True si se actualizó (hay que reiniciar). Nunca revienta el arranque."""
+    if not _es_copia_del_equipo() or os.environ.get("ROMOCAMBIOS_SIN_ACTUALIZAR"):
+        return False
+    import shutil
+    import tempfile
+    import zipfile
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO_GITHUB}/commits/main",
+                                     headers={"Accept": "application/vnd.github+json", "User-Agent": "romocambios"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            sha = json.load(r)["sha"]
+        try:
+            with open(VERSION_FILE) as f:
+                actual = f.read().strip()
+        except OSError:
+            actual = ""
+        if sha == actual:
+            return False
+        print("ROMO CAMBIOS: hay una versión nueva en GitHub, actualizando…")
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = os.path.join(tmp, "app.zip")
+            req = urllib.request.Request(f"https://github.com/{REPO_GITHUB}/archive/{sha}.zip",
+                                         headers={"User-Agent": "romocambios"})
+            with urllib.request.urlopen(req, timeout=300) as r, open(zip_path, "wb") as f:
+                shutil.copyfileobj(r, f)
+            with zipfile.ZipFile(zip_path) as z:
+                z.extractall(tmp)
+            nuevo = next(os.path.join(tmp, d) for d in os.listdir(tmp)
+                         if os.path.isdir(os.path.join(tmp, d)))
+            so = os.path.basename(PROJECT)
+            # código, plantillas y voces; los binarios de ffmpeg (bin/) no se tocan
+            for origen, destino in ((os.path.join(nuevo, so, "web"), ROOT),
+                                    (os.path.join(nuevo, "plantillas"), os.path.join(RAIZ_EQUIPO, "plantillas")),
+                                    (os.path.join(nuevo, "voces"), os.path.join(RAIZ_EQUIPO, "voces"))):
+                if os.path.isdir(origen):
+                    _reemplazar_carpeta(origen, destino)
+            for a in os.listdir(os.path.join(nuevo, so)):   # lanzadores e instaladores
+                if os.path.isfile(os.path.join(nuevo, so, a)):
+                    shutil.copy2(os.path.join(nuevo, so, a), os.path.join(PROJECT, a))
+            for a in os.listdir(nuevo):                       # guías (.md)
+                if a.endswith(".md"):
+                    shutil.copy2(os.path.join(nuevo, a), os.path.join(RAIZ_EQUIPO, a))
+        with open(VERSION_FILE, "w") as f:
+            f.write(sha)
+        print(f"ROMO CAMBIOS: actualizado a {sha[:7]}.")
+        return True
+    except Exception as exc:
+        print(f"ROMO CAMBIOS: no se pudo buscar actualización ({exc}); abro la versión que tengo.")
+        return False
+
+
 def main():
+    if actualizar_desde_github():
+        # arranca de nuevo con el código recién bajado
+        os.execv(sys.executable, [sys.executable] + sys.argv)
     plat.comprobar_python()
     if not FFMPEG or not FFPROBE:
         print(plat.aviso_sin_ffmpeg(), file=sys.stderr)

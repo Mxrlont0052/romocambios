@@ -9,6 +9,8 @@ salen **2 videos por clip**:
 
 Cada video queda registrado solo en la hoja de ROMO CONT y subido al Drive de ROMO.
 
+> 🔄 **Se actualiza sola.** Cada vez que la abres mira si hay una versión nueva aquí en GitHub y la baja (código, plantillas, efectos y voces). No tienes que volver a descargar nada. Si la instalaste antes del 23-10-2026, bájala **una última vez** con el botón de abajo.
+
 ---
 
 ## 👉 ¿Es tu primera vez? Empieza aquí
