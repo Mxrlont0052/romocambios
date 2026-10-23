@@ -29,6 +29,7 @@ PROJECT = os.path.dirname(ROOT)
 CONFIG_DIR = os.path.expanduser("~/.config/romocambios")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 CACHE_DIR = os.path.join(CONFIG_DIR, "cache")
+BATCH_FILE = os.path.join(CONFIG_DIR, "batch.json")
 
 DEFAULT_FONT = plat.fuente_por_defecto()
 DEFAULT_WEBAPP = (
@@ -293,9 +294,9 @@ def build_vf(item, cfg):
 
 def overlay_file(item, cfg):
     """Ruta del overlay si la plantilla elegida es un archivo (id <= -100)."""
-    if item["template"] > -100:
+    if item["template"] is None or item["template"] > -100:
         return ""
-    files = tpl.list_overlays(cfg.get("tpl_dir"), item["type"])
+    files = tpl.list_overlays(cfg.get("tpl_dir"), item.get("tpl_carpeta") or item["type"])
     k = -100 - item["template"]
     return files[k] if 0 <= k < len(files) else ""
 
@@ -469,6 +470,45 @@ BATCH = {"items": [], "running": False, "cancel": False}
 LOCK = threading.Lock()
 
 
+def save_batch():
+    """Guarda el lote en disco para que las marcas sobrevivan a un reinicio.
+
+    Se llama en los puntos con estado estable (lote cargado, retoque aplicado,
+    render terminado), nunca en cada tick de progreso, para no machacar el disco.
+    Un fallo al guardar jamás debe tumbar el render, por eso va todo en try.
+    """
+    try:
+        with LOCK:
+            items = [dict(it) for it in BATCH["items"]]
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        tmp = BATCH_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"items": items}, f, ensure_ascii=False)
+        os.replace(tmp, BATCH_FILE)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def load_batch():
+    """Restaura el lote guardado al arrancar. Deja el motor en reposo."""
+    try:
+        with open(BATCH_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return
+    items = data.get("items") if isinstance(data, dict) else None
+    if not items:
+        return
+    # Un render a medias (proceso muerto) se deja re-aplicable; lo terminado se
+    # respeta tal cual para no volver a subir ni re-registrar nada.
+    for it in items:
+        if it.get("state") not in ("listo", "error"):
+            it["state"] = "listo" if (it.get("con_voz") or it.get("sv")) else "pendiente"
+    BATCH["items"] = items
+    BATCH["running"] = False
+    BATCH["cancel"] = False
+
+
 def new_item(video, marker, mtype, opts):
     return {
         "id": os.path.basename(video) + "|" + str(int(time.time() * 1000) % 100000),
@@ -551,6 +591,72 @@ def pool_plantillas(cfg, tecnica):
     return list(range(tpl.PER_TECHNIQUE))
 
 
+USADAS_FILE = os.path.join(CONFIG_DIR, "usadas.json")
+_USADAS_LOCK = threading.Lock()
+
+
+def carpeta_plantillas(cfg, item):
+    """De qué carpeta sale la plantilla: los RLL (un profe tocando) usan PROFES
+    si existe; todo lo demás, la carpeta de su técnica."""
+    if ((item.get("categoria") or "").upper() == "RELLENO"
+            and tpl.list_overlays(cfg.get("tpl_dir"), "PROFES")):
+        return "PROFES"
+    return item["type"]
+
+
+def _direccion(nombre):
+    """Dirección de una rmn_ (rmn_d3_s07.webm → 3). Las rmt_ no tienen."""
+    m = re.match(r"rmn_d(\d+)_", os.path.basename(nombre).lower())
+    return int(m.group(1)) if m else None
+
+
+def _leer_usadas(cfg):
+    if cfg.get("usadas_leer"):
+        return cfg["usadas_leer"]() or []
+    try:
+        with open(cfg.get("usadas_path") or USADAS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _guardar_usadas(cfg, lista):
+    if cfg.get("usadas_guardar"):
+        cfg["usadas_guardar"](lista)
+        return
+    ruta = cfg.get("usadas_path") or USADAS_FILE
+    try:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        with open(ruta, "w") as f:
+            json.dump(lista, f)
+    except Exception:
+        pass
+
+
+def elegir_plantilla(cfg, carpeta):
+    """Id de plantilla para un video nuevo, sin repetir (Marlon, 23-10-2026).
+
+    En vez de azar puro: se recuerda qué plantillas salieron (de todas las
+    carpetas, las más nuevas al final) y se elige entre las que hace más tiempo
+    no salen, nunca de la misma dirección que los 2 videos anteriores.
+    """
+    files = tpl.list_overlays(cfg.get("tpl_dir"), carpeta)
+    if not files:
+        return random.choice(pool_plantillas(cfg, carpeta))
+    with _USADAS_LOCK:
+        usadas = _leer_usadas(cfg)
+        claves = [f"{carpeta}/{os.path.basename(f)}" for f in files]
+        evitar = {_direccion(u) for u in usadas[-2:]} - {None}
+        cand = [k for k in claves if _direccion(k) not in evitar] or claves
+        # cuanto más atrás en la lista (o si nunca salió), mejor
+        hace = {k: (usadas.index(k) if k in usadas else -1) for k in cand}
+        menor = min(hace.values())
+        elegida = random.choice([k for k in cand if hace[k] == menor])
+        usadas = [u for u in usadas if u != elegida] + [elegida]
+        _guardar_usadas(cfg, usadas[-500:])
+    return -100 - claves.index(elegida)
+
+
 def render_item(item, cfg, voices, full=True):
     """Renderiza SV (si `full`) y la versión con voz."""
     out_dir = cfg.get("out_dir") or plat.carpeta_videos()
@@ -564,12 +670,16 @@ def render_item(item, cfg, voices, full=True):
 
     if item["effect"] in ("auto", "", None):
         item["effect"] = random.choice(EFFECTS)
-    if item["template"] == -1:
-        # -1 = aleatoria. Solo entran las plantillas animadas de la carpeta (ids
+    if item["template"] in (-1, None):
+        # -1/None = aleatoria. Un template None llegaba cuando el panel mandaba un
+        # número inválido (NaN → null): ahora se trata como aleatoria en vez de
+        # reventar más abajo al comparar None > -100.
+        # Solo entran las plantillas animadas de la carpeta (ids
         # <= -100): las de texto que dibujaba ffmpeg quedaron retiradas del
         # sorteo por decisión de Marlon (29-07-2026), se veían genéricas al lado
         # de las de Remotion.
-        item["template"] = random.choice(pool_plantillas(cfg, item["type"]))
+        item["tpl_carpeta"] = carpeta_plantillas(cfg, item)
+        item["template"] = elegir_plantilla(cfg, item["tpl_carpeta"])
 
     if full:
         with LOCK:
@@ -582,9 +692,13 @@ def render_item(item, cfg, voices, full=True):
         # se recorta: sus `-ss`/`-t` no deben tocarla.
         rec = recorte_args(item)
         if ov:
+            # `0:a:0?` y no `0:a?`: los iPhone nuevos meten una 2ª pista de audio
+            # espacial en `apple_apac`, un códec que ffmpeg NO decodifica. Con
+            # `0:a?` se mapeaban todas y el render reventaba entero; se toma solo
+            # la 1ª pista (el AAC estéreo normal). El `?` la hace opcional.
             args = (rec + ["-i", item["video"]] + overlay_decoder(ov) + ["-i", ov] +
                     ["-filter_complex", build_overlay_complex(item, ov),
-                     "-map", "[v]", "-map", "0:a?"])
+                     "-map", "[v]", "-map", "0:a:0?"])
         else:
             args = rec + ["-i", item["video"], "-vf", build_vf(item, cfg)]
         args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -703,8 +817,9 @@ def registrar_en_romocont(item, cfg):
                             " No se registró en romocont: falta elegir quién edita en ⚙︎.").strip()
         return
     try:
-        register_dm(cfg.get("web_app_url", ""), nombre, editor, categoria,
-                    descripcion=TECNICA_TEXTO.get(item["type"], item["type"]))
+        # DESCRIPCION queda vacía: es para el texto que Lizy publica en TikTok
+        # (con eso Peter sabe de qué video vino un lead). Marlon, 12-10-2026.
+        register_dm(cfg.get("web_app_url", ""), nombre, editor, categoria)
         with LOCK:
             item["registrado"] = True
     except Exception as exc:  # noqa: BLE001
@@ -731,8 +846,10 @@ def batch_worker(only_ids=None, full=True):
             except Exception as exc:  # noqa: BLE001
                 with LOCK:
                     it.update(state="error", error=str(exc))
+            save_batch()  # cada video terminado queda a salvo en disco
     finally:
         BATCH["running"] = False
+        save_batch()
 
 
 # --------------------------------------------------------------------------- #
@@ -794,7 +911,8 @@ def list_voices(d):
 
 EDITORES = ["DANIEL", "TIPAN", "MARLONT"]
 
-# Cómo se llama cada técnica en la hoja de romocont (columna DESCRIPCION).
+# Nombre legible de cada técnica. Ya NO se escribe en la hoja de romocont
+# (antes iba a DESCRIPCION y le quitaba el lugar a la descripción publicada).
 TECNICA_TEXTO = {
     "CORTE": "MEZCLA DE CORTE",
     "METRICA": "MEZCLA MÉTRICA",
@@ -1142,6 +1260,7 @@ class Handler(BaseHTTPRequestHandler):
                 items.append(item)
             with LOCK:
                 BATCH["items"] = items
+            save_batch()
             self.send_json({"ok": True, "n": len(items)})
         elif p == "/api/batch/start":
             if BATCH["running"]:
@@ -1175,6 +1294,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=batch_worker,
                                  kwargs={"only_ids": [item["id"]], "full": heavy},
                                  daemon=True).start()
+            save_batch()
             self.send_json({"ok": True, "heavy": heavy})
         elif p == "/api/register":
             try:
@@ -1197,6 +1317,8 @@ def main():
         sys.exit(1)
     port = int(os.environ.get("ROMOCAMBIOS_PORT") or os.environ.get("PORT") or "8777")
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    # Restaura el lote de la sesión anterior: las marcas no se pierden al reiniciar.
+    load_batch()
     # Retoma las subidas que quedaron a medias en la sesión anterior.
     drive.iniciar()
     url = f"http://127.0.0.1:{port}/"

@@ -176,6 +176,7 @@ label.check input { width: auto; }
 .rev .warn { color: #ffd27a; font-size: 12.5px; margin: 0 0 10px; }
 .rev .err { color: #ff8a8a; font-size: 12.5px; margin: 0 0 10px; word-break: break-all; }
 .rev .acts { display: flex; gap: 8px; margin-top: 6px; grid-column: span 2; }
+.rev .tplpick { grid-column: span 2; margin-bottom: 8px; }
 .val { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* Galería de plantillas */

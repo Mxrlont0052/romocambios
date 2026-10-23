@@ -556,6 +556,20 @@ function renderReview(items) {
   });
 }
 
+// Plantillas por técnica, cacheadas: el desplegable de cada tarjeta las pide una
+// sola vez por técnica en vez de una llamada por fila.
+const TPL_CACHE = {};
+async function plantillasDe(tech) {
+  if (!TPL_CACHE[tech]) TPL_CACHE[tech] = api(`/api/templates?tech=${tech}`);
+  try { return await TPL_CACHE[tech]; }
+  catch (e) { delete TPL_CACHE[tech]; throw e; }
+}
+// Nombre limpio para el desplegable: "overlay · rmt_01.webm" → "rmt_01".
+const nombrePlantilla = (t) =>
+  (t.file ? t.file.split("/").pop() : (t.desc || ""))
+    .replace(/^overlay · /, "")
+    .replace(/\.(webm|mov|mp4|png|jpg)$/i, "") || `#${t.id}`;
+
 function reviewRow(it) {
   const el = document.createElement("div");
   el.className = "rev";
@@ -584,8 +598,10 @@ function reviewRow(it) {
         <label>El cambio está en <span class="val" data-v="mk">${it.marker.toFixed(2)} s</span>
           <input type="range" data-k="marker" min="0" max="${it.duration.toFixed(2)}" step="0.05" value="${it.marker}">
         </label>
+        <label class="tplpick">Plantilla
+          <select data-a="tpl"><option value="${it.template}">Cargando plantillas…</option></select>
+        </label>
         <div class="acts">
-          <button class="mini" data-a="tpl">Cambiar plantilla</button>
           <button class="mini" data-a="apply">Aplicar cambios</button>
           <button class="mini ghost" data-a="reveal">Ver en Finder</button>
         </div>
@@ -614,12 +630,21 @@ function reviewRow(it) {
   };
   el.querySelector('[data-a="reveal"]').onclick = () =>
     api("/api/reveal", { path: main || "" });
-  el.querySelector('[data-a="tpl"]').onclick = async () => {
-    const list = await api(`/api/templates?tech=${it.type}`);
-    const id = prompt(`Plantilla (1-${list.length}, vacío = aleatoria) para ${it.base_name}`);
-    if (id === null) return;
-    changes.template = id.trim() === "" ? -1 : (+id - 1);
-    toast("Plantilla marcada; dale a Aplicar cambios");
+  const tplSel = el.querySelector('select[data-a="tpl"]');
+  plantillasDe(it.type).then((list) => {
+    const opts = ['<option value="-1">Aleatoria (que elija sola)</option>']
+      .concat(list.map((t) => `<option value="${t.id}">${nombrePlantilla(t)}</option>`));
+    tplSel.innerHTML = opts.join("");
+    // Deja marcada la que tiene puesta ahora; si es una fija ya sorteada, sale
+    // seleccionada sola. Si no coincide con ninguna (valor viejo), cae en Aleatoria.
+    tplSel.value = String(it.template);
+    if (tplSel.selectedIndex < 0) tplSel.value = "-1";
+  }).catch(() => {
+    tplSel.innerHTML = '<option value="-1">Aleatoria</option>';
+  });
+  tplSel.onchange = () => {
+    changes.template = +tplSel.value;
+    toast("Plantilla elegida; dale a «Aplicar cambios»");
   };
   return el;
 }
